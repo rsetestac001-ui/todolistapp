@@ -1,5 +1,11 @@
 # 待辦記事簿
 
+## [用手機瀏覽器開啟記事簿](https://todolistapp-virid.vercel.app)
+
+請用手機瀏覽器打開 [todolistapp-virid.vercel.app](https://todolistapp-virid.vercel.app)，撳「拍照」或者「選擇相片」。文字同相片只留在該瀏覽器，不會上傳；清除瀏覽器或這個網站的資料之後，記事同相片會一併刪除。
+
+這個公開網址來自 Vercel 專案 `todolistapp`（團隊 `smart-c10`）。建置用 Vite 的 `npm run build`，輸出 `dist/`。今次上線內容來自分支 `cursor/todo-notebook-86fe` 的 commit `e12d50b1babe1bb9989488b113e5af2d6bdb25d4`。Vercel 的 production branch 設定仍然係 `main`。這個 pull request 尚未合併，呢條分支亦未設成自動發佈到 production。
+
 手機優先的純前端待辦記事簿。可以用繁體中文寫低標題同備註，每則記事亦可以附上一張相片。重新載入瀏覽器之後，文字同相片都會保留。
 
 沒有登入，亦沒有後端。相片不會上傳。
