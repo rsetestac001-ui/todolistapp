@@ -7,6 +7,7 @@ export type Task = {
   title: string;
   notes: string;
   completed: boolean;
+  photoId: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -55,7 +56,7 @@ export function validateNotes(notes: string): string | null {
 }
 
 export function createTask(
-  input: { title: string; notes: string },
+  input: { title: string; notes: string; photoId?: string | null },
   meta: { id: string; now: number },
 ): Task {
   const title = normalizeTitle(input.title);
@@ -67,6 +68,7 @@ export function createTask(
     title,
     notes,
     completed: false,
+    photoId: input.photoId ?? null,
     createdAt: meta.now,
     updatedAt: meta.now,
   };
@@ -75,7 +77,7 @@ export function createTask(
 export function updateTask(
   tasks: readonly Task[],
   id: string,
-  input: { title: string; notes: string },
+  input: { title: string; notes: string; photoId?: string | null },
   now: number,
 ): Task[] {
   const title = normalizeTitle(input.title);
@@ -83,7 +85,15 @@ export function updateTask(
   const error = validateTitle(title) ?? validateNotes(notes);
   if (error) throw new Error(error);
   return tasks.map((task) =>
-    task.id === id ? { ...task, title, notes, updatedAt: now } : task,
+    task.id === id
+      ? {
+          ...task,
+          title,
+          notes,
+          photoId: input.photoId === undefined ? task.photoId : input.photoId,
+          updatedAt: now,
+        }
+      : task,
   );
 }
 
@@ -157,6 +167,9 @@ function readTask(value: unknown): Task | null {
   if (typeof task.notes !== "string" || task.notes !== task.notes.trim()) return null;
   if (charLength(task.notes) > NOTES_MAX) return null;
   if (typeof task.completed !== "boolean") return null;
+  if (task.photoId != null && (typeof task.photoId !== "string" || task.photoId.length === 0 || task.photoId.length > 80)) {
+    return null;
+  }
   if (typeof task.createdAt !== "number" || !Number.isFinite(task.createdAt)) return null;
   if (typeof task.updatedAt !== "number" || !Number.isFinite(task.updatedAt)) return null;
   return {
@@ -164,6 +177,7 @@ function readTask(value: unknown): Task | null {
     title: task.title,
     notes: task.notes,
     completed: task.completed,
+    photoId: typeof task.photoId === "string" ? task.photoId : null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };

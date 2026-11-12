@@ -276,6 +276,51 @@ textarea {
   color: #3f342b;
 }
 
+.photo-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.photo-slot,
+.edit-form .photo-actions { margin-bottom: 8px; }
+
+.photo-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.photo-hint,
+.photo-missing {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.photo-preview { margin-top: 8px; }
+
+.photo-image,
+.task-photo {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #f6f0e6;
+}
+
+.task-photo { margin-top: 8px; }
+
+.photo-preview .btn,
+.photo-slot > .btn { width: 100%; margin-top: 8px; }
+
 .task.is-done .task-title {
   color: var(--muted);
   text-decoration: line-through;
@@ -344,6 +389,8 @@ textarea {
     margin-top: 4px;
     min-width: 132px;
   }
+  .photo-image,
+  .task-photo { max-height: 280px; }
   .edit-form .task-actions { min-width: 0; }
 }
 

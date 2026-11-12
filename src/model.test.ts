@@ -48,6 +48,7 @@ describe("task mutations", () => {
       title: "覆郵件",
       notes: "第一行\n\n第二行",
       completed: false,
+      photoId: null,
       createdAt: meta.now,
       updatedAt: meta.now,
     });
@@ -110,5 +111,32 @@ describe("storage parsing", () => {
     });
     expect(parseTasks(raw)).toEqual({ ok: false });
     expect(parseTasks(JSON.stringify({ version: 2, tasks: [] }))).toEqual({ ok: false });
+  });
+
+  it("keeps text tasks that were saved before photos existed", () => {
+    const legacy = JSON.stringify({
+      version: 1,
+      tasks: [{ id: "old", title: "舊筆記", notes: "沒有相片", completed: false, createdAt: 1, updatedAt: 1 }],
+    });
+    expect(parseTasks(legacy)).toEqual({
+      ok: true,
+      tasks: [
+        {
+          id: "old",
+          title: "舊筆記",
+          notes: "沒有相片",
+          completed: false,
+          photoId: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    const withPhoto = createTask({ title: "有相", notes: "", photoId: "pic-1" }, meta);
+    const parsed = parseTasks(serializeTasks([withPhoto]));
+    if (!parsed.ok) throw new Error("expected photo task to parse");
+    expect(parsed.tasks[0]?.photoId).toBe("pic-1");
+    expect(updateTask([withPhoto], withPhoto.id, { title: "改名", notes: "" }, 5)[0]?.photoId).toBe("pic-1");
+    expect(updateTask([withPhoto], withPhoto.id, { title: "改名", notes: "", photoId: null }, 6)[0]?.photoId).toBeNull();
   });
 });
