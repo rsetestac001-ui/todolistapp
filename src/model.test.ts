@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
+  CATEGORY_NAME_MAX,
   NOTES_MAX,
   STORAGE_KEY,
   TITLE_MAX,
   countTasks,
+  createCategory,
   createTask,
+  deleteCategory,
   filterTasks,
-  parseTasks,
+  parseNotebook,
   removeTask,
-  serializeTasks,
+  renameCategory,
+  serializeNotebook,
   sortTasks,
+  tasksForCategory,
   toggleTask,
   updateTask,
+  validateCategoryName,
   validateNotes,
   validateTitle,
 } from "./model";
@@ -49,6 +55,7 @@ describe("task mutations", () => {
       notes: "第一行\n\n第二行",
       completed: false,
       photoId: null,
+      categoryId: null,
       createdAt: meta.now,
       updatedAt: meta.now,
     });
@@ -89,19 +96,63 @@ describe("filters and counts", () => {
   });
 });
 
+describe("categories", () => {
+  it("rejects blank, whitespace, reserved, duplicate, and over-long names", () => {
+    expect(validateCategoryName("   ", [])).toBe("請寫低分類名稱。");
+    expect(validateCategoryName(" 未分類 ", [])).toBe("「未分類」唔可以做分類名稱。");
+    expect(validateCategoryName("類".repeat(CATEGORY_NAME_MAX + 1), [])).toMatch(/不可超過/);
+    const created = createCategory([], "  家事  ", { id: "cat-1", now: 5 });
+    expect(created.category).toEqual({ id: "cat-1", name: "家事", createdAt: 5 });
+    expect(validateCategoryName("家事", created.categories)).toBe("已經有呢個分類。");
+    expect(validateCategoryName("家事", created.categories, "cat-1")).toBeNull();
+    expect(() => renameCategory(created.categories, "cat-1", "   ")).toThrow(/分類名稱/);
+  });
+
+  it("renames without changing the id and moves notes to 未分類 without touching photos", () => {
+    const first = createCategory([], "家事", { id: "cat-1", now: 1 });
+    const renamed = renameCategory(first.categories, "cat-1", "  買餸  ");
+    expect(renamed).toEqual([{ id: "cat-1", name: "買餸", createdAt: 1 }]);
+    const task = createTask({ title: "洗碗", notes: "今晚", photoId: "pic-9", categoryId: "cat-1" }, meta);
+    const removed = deleteCategory(renamed, [task], "cat-1");
+    expect(removed.categories).toEqual([]);
+    expect(removed.tasks[0]).toMatchObject({
+      id: task.id,
+      title: "洗碗",
+      notes: "今晚",
+      photoId: "pic-9",
+      categoryId: null,
+    });
+  });
+
+  it("filters a category together with completion status", () => {
+    const home = createTask({ title: "洗碗", notes: "", categoryId: "cat-1" }, { id: "a", now: 1 });
+    const done = toggleTask([home], "a", 2)[0];
+    if (!done) throw new Error("missing task");
+    const errand = createTask({ title: "交租", notes: "", categoryId: "cat-1" }, { id: "b", now: 3 });
+    const loose = createTask({ title: "覆郵件", notes: "", categoryId: null }, { id: "c", now: 4 });
+    const tasks = [done, errand, loose];
+    const homeTasks = tasksForCategory(tasks, { kind: "category", id: "cat-1" });
+    expect(filterTasks(homeTasks, "active").map((task) => task.id)).toEqual(["b"]);
+    expect(filterTasks(homeTasks, "completed").map((task) => task.id)).toEqual(["a"]);
+    expect(tasksForCategory(tasks, { kind: "uncategorized" }).map((task) => task.id)).toEqual(["c"]);
+    expect(filterTasks(tasks, "active").map((task) => task.id)).toEqual(["b", "c"]);
+  });
+});
+
 describe("storage parsing", () => {
-  it("round-trips tasks and treats a missing value as an empty notebook", () => {
+  it("round-trips tasks and categories, and treats a missing value as an empty notebook", () => {
     expect(STORAGE_KEY).toBe("todolistapp.notebook.v1");
-    const tasks = [createTask({ title: "買餸", notes: "菜\n水果" }, meta)];
-    const raw = serializeTasks(tasks);
-    expect(JSON.parse(raw)).toMatchObject({ version: 1, tasks });
-    expect(parseTasks(raw)).toEqual({ ok: true, tasks });
-    expect(parseTasks(null)).toEqual({ ok: true, tasks: [] });
+    const tasks = [createTask({ title: "買餸", notes: "菜\n水果", categoryId: "cat-1" }, meta)];
+    const categories = createCategory([], "家事", { id: "cat-1", now: 4 }).categories;
+    const raw = serializeNotebook({ tasks, categories });
+    expect(JSON.parse(raw)).toMatchObject({ version: 2, categories, tasks });
+    expect(parseNotebook(raw)).toEqual({ ok: true, tasks, categories });
+    expect(parseNotebook(null)).toEqual({ ok: true, tasks: [], categories: [] });
   });
 
   it("rejects corrupt payloads instead of returning a partial list", () => {
-    expect(parseTasks("{")).toEqual({ ok: false });
-    expect(parseTasks("null")).toEqual({ ok: false });
+    expect(parseNotebook("{")).toEqual({ ok: false });
+    expect(parseNotebook("null")).toEqual({ ok: false });
     const raw = JSON.stringify({
       version: 1,
       tasks: [
@@ -109,34 +160,65 @@ describe("storage parsing", () => {
         { id: "bad", title: "  未修剪  ", notes: "", completed: false, createdAt: 1, updatedAt: 1 },
       ],
     });
-    expect(parseTasks(raw)).toEqual({ ok: false });
-    expect(parseTasks(JSON.stringify({ version: 2, tasks: [] }))).toEqual({ ok: false });
+    expect(parseNotebook(raw)).toEqual({ ok: false });
+    expect(parseNotebook(JSON.stringify({ version: 2, tasks: [] }))).toEqual({ ok: false });
+    expect(parseNotebook(JSON.stringify({ version: 3, categories: [], tasks: [] }))).toEqual({ ok: false });
   });
 
-  it("keeps text tasks that were saved before photos existed", () => {
+  it("keeps text tasks and photo ids that were saved before categories existed", () => {
     const legacy = JSON.stringify({
       version: 1,
-      tasks: [{ id: "old", title: "舊筆記", notes: "沒有相片", completed: false, createdAt: 1, updatedAt: 1 }],
-    });
-    expect(parseTasks(legacy)).toEqual({
-      ok: true,
       tasks: [
+        { id: "old", title: "舊筆記", notes: "沒有相片", completed: false, createdAt: 1, updatedAt: 1 },
+        {
+          id: "photo",
+          title: "舊相片",
+          notes: "仍然在",
+          completed: true,
+          photoId: "pic-keep",
+          createdAt: 2,
+          updatedAt: 3,
+        },
+      ],
+    });
+    expect(parseNotebook(legacy)).toEqual({
+      ok: true,
+      categories: [],
+      tasks: [
+        {
+          id: "photo",
+          title: "舊相片",
+          notes: "仍然在",
+          completed: true,
+          photoId: "pic-keep",
+          categoryId: null,
+          createdAt: 2,
+          updatedAt: 3,
+        },
         {
           id: "old",
           title: "舊筆記",
           notes: "沒有相片",
           completed: false,
           photoId: null,
+          categoryId: null,
           createdAt: 1,
           updatedAt: 1,
         },
       ],
     });
-    const withPhoto = createTask({ title: "有相", notes: "", photoId: "pic-1" }, meta);
-    const parsed = parseTasks(serializeTasks([withPhoto]));
+    const withPhoto = createTask({ title: "有相", notes: "", photoId: "pic-1", categoryId: "cat-1" }, meta);
+    const parsed = parseNotebook(serializeNotebook({ tasks: [withPhoto], categories: [] }));
     if (!parsed.ok) throw new Error("expected photo task to parse");
     expect(parsed.tasks[0]?.photoId).toBe("pic-1");
-    expect(updateTask([withPhoto], withPhoto.id, { title: "改名", notes: "" }, 5)[0]?.photoId).toBe("pic-1");
-    expect(updateTask([withPhoto], withPhoto.id, { title: "改名", notes: "", photoId: null }, 6)[0]?.photoId).toBeNull();
+    expect(parsed.tasks[0]?.categoryId).toBeNull();
+    expect(updateTask([withPhoto], withPhoto.id, { title: "改名", notes: "" }, 5)[0]).toMatchObject({
+      photoId: "pic-1",
+      categoryId: "cat-1",
+    });
+    expect(updateTask([withPhoto], withPhoto.id, { title: "改名", notes: "", photoId: null, categoryId: null }, 6)[0]).toMatchObject({
+      photoId: null,
+      categoryId: null,
+    });
   });
 });

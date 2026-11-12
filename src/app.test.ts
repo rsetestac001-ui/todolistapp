@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mountApp, type KeyValueStore } from "./app";
-import { STORAGE_KEY, serializeTasks, type Task } from "./model";
+import { STORAGE_KEY, serializeNotebook, type Category, type Task } from "./model";
 import { imageFileError, memoryPhotoRepository, PhotoError, type PhotoRepository, type PreparedPhoto } from "./photos";
 
 let container: HTMLDivElement;
@@ -253,11 +253,211 @@ describe("todo notebook", () => {
     expect(next.querySelector(".task-title")?.textContent).toBe("留低");
     expect(localStorage.getItem(STORAGE_KEY)).toContain("留低");
     const saved = localStorage.getItem(STORAGE_KEY);
-    const parsed = JSON.parse(saved ?? "null") as { tasks: Task[] };
+    const parsed = JSON.parse(saved ?? "null") as { tasks: Task[]; categories: Category[] };
     expect(parsed.tasks[0]?.notes).toBe("");
-    expect(serializeTasks(parsed.tasks)).toBe(saved);
+    expect(parsed.tasks[0]?.categoryId).toBeNull();
+    expect(serializeNotebook(parsed)).toBe(saved);
   });
 });
+
+describe("categories", () => {
+  it("starts without custom categories and marks a new note as 未分類", () => {
+    const store = memoryStore();
+    setup({ storage: store });
+    expect(container.querySelector("#category-empty")?.textContent).toContain("未有自訂分類");
+    expect(container.querySelector(".category-name")).toBeNull();
+    expect(container.textContent).not.toContain("家事");
+    addTask("覆郵件", "第一行");
+    expect(categoryOf("覆郵件")).toBe("未分類");
+    const saved = JSON.parse(store.getItem(STORAGE_KEY) ?? "null") as { categories: Category[]; tasks: Task[] };
+    expect(saved.categories).toEqual([]);
+    expect(saved.tasks[0]?.categoryId).toBeNull();
+  });
+
+  it("rejects blank, reserved, and duplicate names, and renders the name as text", () => {
+    setup({ storage: memoryStore() });
+    addCategory("   ");
+    expect(container.querySelector("#category-error")?.textContent).toBe("請寫低分類名稱。");
+    expect(container.querySelector(".category-name")).toBeNull();
+
+    addCategory(" 未分類 ");
+    expect(container.querySelector("#category-error")?.textContent).toBe("「未分類」唔可以做分類名稱。");
+
+    const hostile = "<img src=x onerror=alert(1)>";
+    addCategory(`  ${hostile}  `);
+    expect(container.querySelector(".category-name")?.textContent).toContain(hostile);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+
+    addCategory(hostile);
+    expect(container.querySelector("#category-error")?.textContent).toBe("已經有呢個分類。");
+    expect(container.querySelectorAll(".category-name")).toHaveLength(1);
+  });
+
+  it("assigns one category, combines it with completion, and renames without changing the id", () => {
+    const store = memoryStore();
+    const app = setup({ storage: store });
+    addCategory("家事");
+    addCategory("工作");
+    addTask("未歸類", "");
+    selectCategory("add-category", "id-1");
+    addTask("洗碗", "今晚");
+    selectCategory("add-category", "id-2");
+    addTask("交報告", "");
+
+    clickControl("編輯「未歸類」");
+    selectCategory("edit-category-id-3", "id-2");
+    clickControl("儲存");
+    expect(categoryOf("未歸類")).toBe("工作");
+
+    clickControl("標記「洗碗」為已完成");
+    clickControl("分類家事，1 項");
+    expect(titles()).toEqual(["洗碗"]);
+    expect(categoryOf("洗碗")).toBe("家事");
+    clickControl("未完成，0 項");
+    expect(container.querySelector("#empty-state")?.textContent).toContain("沒有未完成的記事");
+    clickControl("已完成，1 項");
+    expect(titles()).toEqual(["洗碗"]);
+
+    clickControl("分類未分類，0 項");
+    expect(container.querySelector("#empty-state")?.textContent).toContain("未分類未有記事");
+    clickControl("分類工作，2 項");
+    clickControl("未完成，2 項");
+    expect(titles()).toEqual(["交報告", "未歸類"]);
+    clickControl("分類全部，3 項");
+    clickControl("全部，3 項");
+    expect(titles()).toEqual(["交報告", "洗碗", "未歸類"]);
+
+    clickControl("修改分類「家事」");
+    fill(input("rename-category-id-1"), "   ");
+    clickControl("儲存名稱");
+    expect(container.querySelector("#rename-error-id-1")?.textContent).toBe("請寫低分類名稱。");
+    fill(input("rename-category-id-1"), "  買餸  ");
+    clickControl("儲存名稱");
+    expect(categoryOf("洗碗")).toBe("買餸");
+
+    const saved = JSON.parse(store.getItem(STORAGE_KEY) ?? "null") as { categories: Category[]; tasks: Task[] };
+    expect(saved.categories.find((category) => category.name === "買餸")?.id).toBe("id-1");
+    expect(saved.tasks.find((task) => task.title === "洗碗")).toMatchObject({ categoryId: "id-1", photoId: null });
+    app.destroy();
+
+    const next = document.createElement("div");
+    document.body.append(next);
+    mountApp(next, { storage: store, now: () => ++clock, newId: () => `id-${++sequence}` });
+    expect(next.textContent).toContain("買餸");
+    expect(next.textContent).toContain("工作");
+    const reloaded = [...next.querySelectorAll(".task")].find((node) => node.querySelector(".task-title")?.textContent === "洗碗");
+    expect(reloaded?.querySelector(".task-category-name")?.textContent).toBe("買餸");
+  });
+
+  it("tells the user a deleted category keeps notes and photos, then moves notes to 未分類", async () => {
+    const store = memoryStore();
+    const photos = memoryPhotoRepository();
+    setup({ storage: store, photos, preparePhoto: fakePrepare });
+    addCategory("家事");
+    fill(input("add-title"), "洗碗");
+    selectCategory("add-category", "id-1");
+    chooseFile("library", new File(["png"], "dish.png", { type: "image/png" }));
+    await flush();
+    clickControl("加入記事");
+    await flush();
+    const before = JSON.parse(store.getItem(STORAGE_KEY) ?? "null") as { tasks: Task[] };
+    const photoId = before.tasks[0]?.photoId;
+    expect(photoId).toBeTruthy();
+    expect(before.tasks[0]?.categoryId).toBe("id-1");
+
+    clickControl("刪除分類「家事」");
+    expect(container.textContent).toContain("這個分類的 1 則記事會改為未分類。");
+    expect(container.textContent).toContain("記事同相片都會保留，不會刪除。");
+    expect(titles()).toEqual(["洗碗"]);
+    expect(store.getItem(STORAGE_KEY)).toContain(photoId ?? "missing");
+
+    clickControl("取消刪除分類");
+    expect(categoryOf("洗碗")).toBe("家事");
+    container.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(categoryOf("洗碗")).toBe("家事");
+
+    clickControl("刪除分類「家事」");
+    container.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(categoryOf("洗碗")).toBe("家事");
+
+    clickControl("刪除分類「家事」");
+    clickControl("確定刪除分類「家事」");
+    expect(container.querySelector(".category-name")).toBeNull();
+    expect(titles()).toEqual(["洗碗"]);
+    expect(categoryOf("洗碗")).toBe("未分類");
+    expect(container.querySelector(".task-photo")).toBeInstanceOf(HTMLImageElement);
+    const after = JSON.parse(store.getItem(STORAGE_KEY) ?? "null") as { tasks: Task[]; categories: Category[] };
+    expect(after.categories).toEqual([]);
+    expect(after.tasks[0]).toMatchObject({ title: "洗碗", notes: "", categoryId: null, photoId });
+    expect(await photos.records.get(photoId ?? "")?.blob.text()).toBe("jpeg-bytes");
+  });
+
+  it("keeps an older note and its photo id when categories are added later", () => {
+    const legacy = JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: "old",
+          title: "舊筆記",
+          notes: "只係文字",
+          completed: false,
+          photoId: "pic-keep",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+    });
+    const store = memoryStore({ [STORAGE_KEY]: legacy });
+    const app = setup({ storage: store, photos: memoryPhotoRepository() });
+    expect(titles()).toEqual(["舊筆記"]);
+    expect(categoryOf("舊筆記")).toBe("未分類");
+    expect(store.getItem(STORAGE_KEY)).toBe(legacy);
+
+    addCategory("家事");
+    const saved = JSON.parse(store.getItem(STORAGE_KEY) ?? "null") as {
+      version: number;
+      tasks: Task[];
+      categories: Category[];
+    };
+    expect(saved.version).toBe(2);
+    expect(saved.categories[0]).toMatchObject({ id: "id-1", name: "家事" });
+    expect(saved.tasks[0]).toMatchObject({ id: "old", title: "舊筆記", notes: "只係文字", photoId: "pic-keep", categoryId: null });
+    app.destroy();
+
+    const next = document.createElement("div");
+    document.body.append(next);
+    mountApp(next, {
+      storage: store,
+      photos: memoryPhotoRepository(),
+      now: () => ++clock,
+      newId: () => `id-${++sequence}`,
+    });
+    expect(next.querySelector(".task-title")?.textContent).toBe("舊筆記");
+    expect(next.querySelector(".task-notes")?.textContent).toBe("只係文字");
+    expect(next.querySelector(".category-name")?.textContent).toContain("家事");
+    expect(next.querySelector(".task-category-name")?.textContent).toBe("未分類");
+  });
+});
+
+function categoryOf(title: string, root: ParentNode = container): string {
+  const task = [...root.querySelectorAll(".task")].find((node) => node.querySelector(".task-title")?.textContent === title);
+  return task?.querySelector(".task-category-name")?.textContent ?? "";
+}
+
+function addCategory(name: string) {
+  fill(input("category-name"), name);
+  const form = container.querySelector("#category-form");
+  if (!(form instanceof HTMLFormElement)) throw new Error("Missing category form");
+  form.requestSubmit();
+}
+
+function selectCategory(id: string, value: string) {
+  const node = container.querySelector(`#${id}`);
+  if (!(node instanceof HTMLSelectElement)) throw new Error(`Missing select ${id}`);
+  node.value = value;
+  node.dispatchEvent(new Event("change", { bubbles: true }));
+}
 
 // File inputs are simulated in happy-dom. Nothing here opens a physical camera.
 describe("photo attachments (simulated file input, not a device camera)", () => {
